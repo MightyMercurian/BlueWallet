@@ -18,6 +18,7 @@ interface QRCodeComponentProps {
   size?: number;
   ecl?: 'H' | 'Q' | 'M' | 'L';
   onError?: () => void;
+  overlay?: React.ReactNode;
 }
 
 const BORDER_WIDTH = 6;
@@ -62,6 +63,7 @@ const QRCodeComponent: React.FC<QRCodeComponentProps> = ({
   size = 300,
   ecl = 'H',
   onError = () => {},
+  overlay,
 }) => {
   const qrCode = useRef<any>();
   const { colors, dark } = useTheme();
@@ -90,10 +92,13 @@ const QRCodeComponent: React.FC<QRCodeComponentProps> = ({
     container: { borderWidth: dark ? BORDER_WIDTH : 0 },
   });
 
+  // When overlay is provided, don't render the default logo in the QR code
+  const shouldRenderLogo = isLogoRendered && !overlay;
+
   const renderQRCode = (
     <QRCode
       value={value}
-      {...(isLogoRendered ? { logo: require('../img/qr-code.png') } : {})}
+      {...(shouldRenderLogo ? { logo: require('../img/qr-code.png') } : {})}
       size={newSize}
       logoSize={logoSize}
       color="#000000"
@@ -103,6 +108,13 @@ const QRCodeComponent: React.FC<QRCodeComponentProps> = ({
       getRef={(c: any) => (qrCode.current = c)}
       onError={onError}
     />
+  );
+
+  const renderQRCodeWithOverlay = (
+    <View style={styles.qrWrapper}>
+      {renderQRCode}
+      {overlay && <View style={styles.overlayContainer}>{overlay}</View>}
+    </View>
   );
 
   return (
@@ -116,10 +128,10 @@ const QRCodeComponent: React.FC<QRCodeComponentProps> = ({
     >
       {isMenuAvailable ? (
         <ToolTipMenu actions={menuActions} onPressMenuItem={onPressMenuItem}>
-          {renderQRCode}
+          {renderQRCodeWithOverlay}
         </ToolTipMenu>
       ) : (
-        renderQRCode
+        renderQRCodeWithOverlay
       )}
     </View>
   );
@@ -129,4 +141,15 @@ export default QRCodeComponent;
 
 const styles = StyleSheet.create({
   container: { borderColor: '#FFFFFF' },
+  qrWrapper: {
+    position: 'relative',
+  },
+  overlayContainer: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -45 }, { translateY: -45 }],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

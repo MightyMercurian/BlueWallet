@@ -33,6 +33,8 @@ import { SuccessView } from '../send/success';
 import { BlueSpacing20, BlueSpacing40 } from '../../components/BlueSpacing';
 import { BlueLoading } from '../../components/BlueLoading';
 import SafeAreaScrollView from '../../components/SafeAreaScrollView';
+import PaynymAvatar from '../../components/paynym/PaynymAvatar';
+import PaynymDirectory from '../../blue_modules/paynym/PaynymDirectory';
 
 const segmentControlValues = [loc.wallets.details_address, loc.bip47.payment_code];
 const HORIZONTAL_PADDING = 20;
@@ -90,6 +92,7 @@ const ReceiveDetails = () => {
   const [initialUnconfirmed, setInitialUnconfirmed] = useState(0);
   const [displayBalance, setDisplayBalance] = useState('');
   const [qrCodeSize, setQRCodeSize] = useState(90);
+  const [isPaynymClaimed, setIsPaynymClaimed] = useState(false);
 
   const wallet = walletID ? wallets.find(w => w.getID() === walletID) : undefined;
   const isBIP47Enabled = wallet?.isBIP47Enabled();
@@ -233,6 +236,24 @@ const ReceiveDetails = () => {
         headerRight: () => HeaderRight,
       });
   }, [HeaderRight, colors.foregroundColor, setOptions, wallet]);
+
+  // Check if Paynym is claimed
+  useEffect(() => {
+    const checkPaynymStatus = async () => {
+      if (wallet && isBIP47Enabled && 'getBIP47PaymentCode' in wallet && typeof wallet.getBIP47PaymentCode === 'function') {
+        const paymentCode = wallet.getBIP47PaymentCode();
+        if (paymentCode) {
+          try {
+            const nymInfo = await PaynymDirectory.nym(paymentCode);
+            setIsPaynymClaimed(!!nymInfo && !!nymInfo.value?.nymName);
+          } catch (error) {
+            console.debug('Failed to fetch Paynym status:', error);
+          }
+        }
+      }
+    };
+    checkPaynymStatus();
+  }, [wallet, isBIP47Enabled]);
 
   // re-fetching address balance periodically
   useEffect(() => {
@@ -416,7 +437,11 @@ const ReceiveDetails = () => {
             <>
               <TipBox description={loc.receive.bip47_explanation} containerStyle={styles.tip} />
               <View style={styles.qrCodeContainer}>
-                <QRCodeComponent value={qrValue} size={qrCodeSize} />
+                <QRCodeComponent 
+                  value={qrValue} 
+                  size={qrCodeSize} 
+                  overlay={isPaynymClaimed ? <PaynymAvatar paymentCode={qrValue} size={qrCodeSize * 0.3} style={{ borderRadius: qrCodeSize * 0.15, borderWidth: 3, borderColor: '#FFFFFF' }} /> : undefined}
+                />
               </View>
               <CopyTextToClipboard text={qrValue} truncated={false} />
             </>
