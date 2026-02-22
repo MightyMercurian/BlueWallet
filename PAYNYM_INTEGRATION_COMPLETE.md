@@ -144,8 +144,11 @@ WalletDetails
 PaynymClaimScreen
     │
     ├── On mount:
-    │   └── PaynymDirectory.create(paymentCode)
-    │   └── Display avatar + nymName (unclaimed)
+    │   ├── Show full-screen ActivityIndicator
+    │   ├── PaynymDirectory.create(paymentCode)  ← registers on paynym.rs (idempotent)
+    │   │   ├── 201 = newly created (unclaimed)
+    │   │   └── 200 = already exists (use claimed field from response)
+    │   └── Avatar now guaranteed to exist → Display PaynymAvatar + nymName
     │
     └── User clicks "Claim Ownership":
         ├── PaynymDirectory.token(paymentCode)

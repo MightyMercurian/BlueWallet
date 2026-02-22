@@ -363,6 +363,19 @@ const PaynymClaimScreen: React.FC = () => {
     </View>
   );
 
+  // Show a full-screen loader while we're registering the paynym on mount
+  // (create() must succeed before the avatar exists on paynym.rs)
+  if (loading && !paynymInfo) {
+    return (
+      <SafeAreaView style={[styles.container, stylesHook.container]}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.foregroundColor} />
+          <Text style={[styles.loadingText, stylesHook.description]}>Loading your PayNym…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.container, stylesHook.container]}>
       <ScrollView style={styles.scrollView}>
@@ -460,6 +473,16 @@ const styles = StyleSheet.create({
   },
   linkText: {
     fontSize: 16,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 16,
+  },
+  loadingText: {
+    fontSize: 16,
+    textAlign: 'center',
   },
 });
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Text, Image } from 'react-native';
+import { View, StyleSheet, Image } from 'react-native';
 
 interface PaynymAvatarProps {
   paymentCode: string;
@@ -39,7 +39,7 @@ const PaynymAvatar: React.FC<PaynymAvatarProps> = ({
         />
       );
     }
-    // Fallback if no placeholderColor provided
+    // Fallback if no placeholderColor provided — use a neutral grey circle
     return (
       <View
         style={[
@@ -48,9 +48,7 @@ const PaynymAvatar: React.FC<PaynymAvatarProps> = ({
           { width: size, height: size, borderRadius: size / 2 },
           style,
         ]}
-      >
-        <Text style={[styles.fallbackText, { fontSize: size / 3 }]}>🤖</Text>
-      </View>
+      />
     );
   }
 
@@ -89,9 +87,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#9CA3AF',
     borderWidth: 2,
     borderColor: '#6B7280',
-  },
-  fallbackText: {
-    color: '#fff',
   },
 });
 
