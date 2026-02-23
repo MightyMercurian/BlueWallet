@@ -214,6 +214,12 @@ const ReceiveDetails = () => {
     }
   }, [address, setAddressBIP21Encoded]);
 
+  const avatarOverlayStyle = useMemo(() => ({
+    borderRadius: qrCodeSize * 0.15,
+    borderWidth: 3,
+    borderColor: '#FFFFFF' as const,
+  }), [qrCodeSize]);
+
   const toolTipActions = useMemo(() => {
     const action = { ...CommonToolTipActions.PaymentsCode };
     action.menuState = isBIP47Enabled;
@@ -245,7 +251,8 @@ const ReceiveDetails = () => {
         if (paymentCode) {
           try {
             const nymInfo = await PaynymDirectory.nym(paymentCode);
-            setIsPaynymClaimed(!!nymInfo && !!nymInfo.value?.nymName);
+            const codes = nymInfo?.value?.codes ?? [];
+            setIsPaynymClaimed(codes.some((c: any) => c.claimed));
           } catch (error) {
             console.debug('Failed to fetch Paynym status:', error);
           }
@@ -440,7 +447,7 @@ const ReceiveDetails = () => {
                 <QRCodeComponent 
                   value={qrValue} 
                   size={qrCodeSize} 
-                  overlay={isPaynymClaimed ? <PaynymAvatar paymentCode={qrValue} size={qrCodeSize * 0.3} style={{ borderRadius: qrCodeSize * 0.15, borderWidth: 3, borderColor: '#FFFFFF' }} /> : undefined}
+                  overlay={isPaynymClaimed ? <PaynymAvatar paymentCode={qrValue} size={qrCodeSize * 0.3} style={avatarOverlayStyle} /> : undefined}
                 />
               </View>
               <CopyTextToClipboard text={qrValue} truncated={false} />
