@@ -483,6 +483,12 @@ export class BlueApp {
           presentAlert({ message: error.message });
         }
 
+        // Self-heal any BIP47 contact list corruption (duplicates across both arrays)
+        // that may have been saved before cross-array dedup checks were in place.
+        if ('sanitizeBIP47PaymentCodes' in unserializedWallet) {
+          (unserializedWallet as any).sanitizeBIP47PaymentCodes();
+        }
+
         // done
         const ID = unserializedWallet.getID();
         if (!this.wallets.some(wallet => wallet.getID() === ID)) {
@@ -823,6 +829,12 @@ export class BlueApp {
         // B. Fetch OUTGOING connections (people I added/follow via API)
         if ('fetchBIP47ReceiverPaymentCodesViaPaynym' in wallet) {
           await wallet.fetchBIP47ReceiverPaymentCodesViaPaynym();
+        }
+
+        // C. Cross-array dedup: clean up any duplicates that arose from the two fetches above
+        //    (e.g. a code that appeared in both _receive_ and _send_ lists).
+        if ('sanitizeBIP47PaymentCodes' in wallet) {
+          (wallet as any).sanitizeBIP47PaymentCodes();
         }
       } catch (error) {
         console.error(`Failed to fetch payment codes for wallet ${wallet.label || wallet.getLabel()}:`, error);

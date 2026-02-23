@@ -106,7 +106,7 @@ export default function PaymentCodesList() {
     const newData: DataSection[] = [
       {
         title: '',
-        data: foundWallet.getBIP47SenderPaymentCodes().concat(foundWallet.getBIP47ReceiverPaymentCodes()).filter(onlyUnique),
+        data: foundWallet.getAllBIP47PaymentCodes(),
       },
     ];
     setData(newData);

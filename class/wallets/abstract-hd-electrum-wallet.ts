@@ -101,6 +101,13 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
   _segwit_payment_codes: Record<string, boolean>;
 
   /**
+   * Maps any payment code (segwit or non-segwit) → nymId.
+   * Used to detect when two different payment code strings refer to the same person.
+   * Persisted so we don't have to re-resolve on every startup.
+   */
+  _nymid_by_payment_code: Record<string, string>;
+
+  /**
    * this is where we put transactions related to our PC receive addresses. this is both
    * incoming transactions AND outgoing transactions (when we spend those funds)
    *
@@ -132,6 +139,7 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
     this._balances_by_payment_code_index = {};
     this._addresses_by_payment_code_receive = {};
     this._segwit_payment_codes = {};
+    this._nymid_by_payment_code = {};
 
     // cache
     this._fp = '';
@@ -1904,6 +1912,37 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
   }
 
   /**
+   * Fetch the Paynym profile for a given payment code (or nymId), store all of that
+   * nymId's payment codes in `_nymid_by_payment_code`, and return the canonical
+   * (segwit = codes[0]) payment code string — or null on failure.
+   *
+   * This is the central place for nymId resolution. Both the blockchain scan and the
+   * API recovery path call this so we always have consistent identity data.
+   */
+  private async _resolveNymId(paymentCodeOrNymId: string): Promise<string | null> {
+    try {
+      const nymResponse = await PaynymDirectory.nym(paymentCodeOrNymId);
+      if (!nymResponse.value?.codes || nymResponse.statusCode !== 200) return null;
+
+      const { nymID, codes } = nymResponse.value;
+      if (!nymID || !codes?.length) return null;
+
+      // Register every code this nymId owns so we can detect cross-code duplicates.
+      for (const entry of codes) {
+        if (entry.code) {
+          this._nymid_by_payment_code = this._nymid_by_payment_code || {};
+          this._nymid_by_payment_code[entry.code] = nymID;
+        }
+      }
+
+      // Canonical code is always codes[0] — paynym.rs puts the segwit code first.
+      return codes[0]?.code ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * check our notification address, and decypher all payment codes people notified us
    * about (so they can pay us)
    */
@@ -1917,13 +1956,32 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
     for (const txHex of Object.values(txHexs)) {
       try {
         const paymentCode = bip47_instance.getPaymentCodeFromRawNotificationTransaction(txHex);
-        if (this._receive_payment_codes.includes(paymentCode)) continue; // already have it
 
         // final check if PC is even valid (could've been constructed by a buggy code, and our code would crash with that):
         try {
           bip47.fromPaymentCode(paymentCode);
         } catch (_) {
           continue;
+        }
+
+        // Resolve nymId so we can detect cross-code duplicates later in sanitize.
+        // Fire-and-forget — we don't block on this; sanitizeBIP47PaymentCodes() will
+        // use the map on next startup once it's been populated.
+        this._resolveNymId(paymentCode).catch(() => {/* ignore network errors */});
+
+        if (this._receive_payment_codes.includes(paymentCode)) continue; // already have it in receive list
+        if (this._send_payment_codes.includes(paymentCode)) continue; // already have it in send list (bidirectional contact)
+
+        // NymId-based cross-code dedup: check if we already know this person under a
+        // different payment code (segwit vs non-segwit). Use the cached map — if we've
+        // seen this nymId before we'll skip this code.
+        const knownNymId = this._nymid_by_payment_code?.[paymentCode];
+        if (knownNymId) {
+          const alreadyKnownByNymId = [
+            ...this._receive_payment_codes,
+            ...this._send_payment_codes,
+          ].some(known => this._nymid_by_payment_code?.[known] === knownNymId);
+          if (alreadyKnownByNymId) continue;
         }
 
         this._receive_payment_codes.push(paymentCode);
@@ -1937,84 +1995,108 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
 
   /**
    * Recover outgoing BIP47 payment codes via Paynym API.
-   * Queries Paynym directory for all nyms you're following and adds their payment codes.
-   * This allows restoring wallet to recover all BIP47 connections (people you can pay).
+   *
+   * This method is only useful when the user has a **claimed** Paynym. An unclaimed
+   * Paynym cannot authenticate with the API, so its `following` list is always empty
+   * and there is nothing extra to recover beyond what the blockchain already provides.
+   *
+   * When claimed, the Paynym API's `following` list is treated as an authoritative
+   * record of contacts the user intentionally added. We trust it directly — no
+   * on-chain notification-transaction guard — because the whole point is to recover
+   * contacts whose notification tx might not yet be in the locally-fetched history.
+   *
+   * Recovered codes are added to `_send_payment_codes` (outgoing), deduplicated
+   * against both `_send_payment_codes` and `_receive_payment_codes` so we don't
+   * create duplicates regardless of which list a code already lives in.
    */
   async fetchBIP47ReceiverPaymentCodesViaPaynym(): Promise<void> {
     if (!this.allowBIP47() || !this.isBIP47Enabled()) return;
 
     try {
       const myPaymentCode = this.getBIP47PaymentCode();
-      const response = await PaynymDirectory.nym(myPaymentCode);
 
-      if (!response.value || response.statusCode !== 200) return;
+      // Step 1: Look up our own Paynym to check claimed status and get following list.
+      const myNymResponse = await PaynymDirectory.nym(myPaymentCode);
 
-      const myAccount = response.value;
-      const recoveredCodes = new Set<string>();
+      if (!myNymResponse.value || myNymResponse.statusCode !== 200) {
+        // Paynym doesn't exist yet (404) or network error — nothing to recover.
+        return;
+      }
 
-      // HELPER: Process a single follow entry
-      const processFollow = async (follow: any) => {
+      const myAccount = myNymResponse.value;
+
+      // Step 2: Only proceed if our Paynym is claimed.
+      // An unclaimed Paynym has never authenticated with the API, so its following
+      // list will be empty and the extra API calls would be pointless.
+      const isClaimed = myAccount.codes?.some((c: any) => c.claimed) ?? false;
+      if (!isClaimed) {
+        console.log('[BIP47] Paynym is unclaimed — skipping API-based contact recovery');
+        return;
+      }
+
+      const following = myAccount.following || [];
+      if (following.length === 0) return;
+
+      console.log(`[BIP47] Claimed Paynym has ${following.length} following entries — recovering contacts via API`);
+
+      // Build a combined set of all codes we already know about (send + receive),
+      // so we can skip duplicates regardless of which direction they were added.
+      const knownCodes = new Set<string>([
+        ...this._send_payment_codes,
+        ...this._receive_payment_codes,
+      ]);
+
+      // Step 3: For each followed nymId, fetch their profile and extract their payment code.
+      const processFollow = async (follow: { nymId: string }): Promise<string[]> => {
         try {
-          // Optimization: Check if the follow object ALREADY has the code
-          // (Depends on API response, but good to check to avoid network call)
-          if (follow.code) {
-            return [follow.code];
-          }
-
-          // Otherwise fetch their profile — only use the claimed (primary) payment code
-          const nymResponse = await PaynymDirectory.nym(follow.nymId);
-          if (nymResponse.value?.codes) {
-            const claimedCode = nymResponse.value.codes.find((c: any) => c.claimed);
-            return claimedCode ? [claimedCode.code] : [nymResponse.value.codes[0]?.code].filter(Boolean);
-          }
+          // Use _resolveNymId so all of this person's codes (segwit + non-segwit) are
+          // stored in _nymid_by_payment_code before we do dedup — this ensures that
+          // even if the blockchain scan stored their non-segwit code, we can detect
+          // them as the same person in sanitizeBIP47PaymentCodes().
+          const canonicalCode = await this._resolveNymId(follow.nymId);
+          return canonicalCode ? [canonicalCode] : [];
         } catch (e) {
-          console.log('Error processing follow:', follow.nymId, e);
+          console.log('[BIP47] Error fetching nym for follow entry:', follow.nymId, e);
+          return [];
         }
-        return [];
       };
 
-      // EXECUTE REQUESTS IN BATCHES TO AVOID OVERWHELMING THE API
-      const following = myAccount.following || [];
+      // Execute in small batches to avoid overwhelming the API.
       const BATCH_SIZE = 5;
-      const results: string[][] = [];
+      const allFoundCodes: string[] = [];
       for (let i = 0; i < following.length; i += BATCH_SIZE) {
         const batch = following.slice(i, i + BATCH_SIZE);
         const batchResults = await Promise.all(batch.map(processFollow));
-        results.push(...batchResults);
+        allFoundCodes.push(...batchResults.flat());
       }
 
-      // Flatten results and process
-      const allFoundCodes = results.flat();
-
+      // Step 4: Add newly discovered codes to _send_payment_codes.
       for (const code of allFoundCodes) {
-        if (!code || this._send_payment_codes.includes(code)) continue;
+        if (!code || knownCodes.has(code)) continue;
 
         try {
-          bip47.fromPaymentCode(code); // Validate
-
-          // Only recover codes where we actually sent a notification tx on-chain.
-          // Without this check, the wallet could derive addresses for a counterparty
-          // that never received our notification — funds sent there would be unrecoverable.
-          if (!this.getBIP47NotificationTransaction(code)) continue;
-
-          if (!recoveredCodes.has(code)) {
-            console.log('Recovered outgoing Paynym:', code);
-            recoveredCodes.add(code);
-            this._send_payment_codes.push(code);
-
-            // Init tracking
-            this._next_free_payment_code_address_index_send[code] = 0;
-            this._addresses_by_payment_code_send[code] = {};
-          }
-        } catch (e) {
-          // Invalid code
+          bip47.fromPaymentCode(code); // Validate — throws if malformed.
+        } catch (_) {
+          continue; // Skip invalid codes silently.
         }
+
+        console.log('[BIP47] Recovered outgoing contact via Paynym API:', code);
+        knownCodes.add(code); // Prevent duplicates within this batch.
+        this._send_payment_codes.push(code);
+
+        // Initialise tracking structures for the new code.
+        this._next_free_payment_code_address_index_send[code] = 0;
+        this._addresses_by_payment_code_send[code] = {};
       }
 
-      // Update the main array
-      this._send_payment_codes = [...new Set(this._send_payment_codes)];
+      // Final deduplication pass (safety net): deduplicate within _send_payment_codes
+      // AND remove any code that already lives in _receive_payment_codes (cross-array dedup).
+      const finalReceiveSet = new Set(this._receive_payment_codes);
+      this._send_payment_codes = [...new Set(this._send_payment_codes)].filter(
+        code => !finalReceiveSet.has(code),
+      );
     } catch (error) {
-      console.error('Error fetching BIP47 receiver payment codes via Paynym:', error);
+      console.error('[BIP47] Error fetching receiver payment codes via Paynym:', error);
     }
   }
 
@@ -2076,10 +2158,77 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
   }
 
   /**
+   * Self-healing deduplication of BIP47 contact lists.
+   *
+   * Called after deserialization to clean up any wallet data that was saved before
+   * the cross-array duplicate checks were in place. A payment code that ended up
+   * in BOTH _send_payment_codes and _receive_payment_codes is kept only in
+   * _receive_payment_codes (the "incoming" direction takes priority, since it means
+   * the counterparty initiated contact by sending a notification tx to us).
+   *
+   * Also removes within-array duplicates from both lists as a safety net.
+   */
+  sanitizeBIP47PaymentCodes(): void {
+    // Ensure the nymId map is always initialized (guards against old serialized wallets
+    // that predate the field).
+    this._nymid_by_payment_code = this._nymid_by_payment_code || {};
+
+    // 1. Deduplicate each list individually (handles within-array dupes).
+    this._receive_payment_codes = [...new Set(this._receive_payment_codes)];
+    this._send_payment_codes = [...new Set(this._send_payment_codes)];
+
+    // 2. Remove from _send_payment_codes any code already in _receive_payment_codes.
+    //    Priority: receive list wins (they sent us a notification tx, that's the ground truth).
+    const receiveSet = new Set(this._receive_payment_codes);
+    this._send_payment_codes = this._send_payment_codes.filter((code) => !receiveSet.has(code));
+
+    // 3. NymId-based cross-code dedup.
+    //    When the blockchain scan stored code A (non-segwit) and the API recovery stored
+    //    code B (segwit) for the same person, the string sets above can't detect that.
+    //    Here we use _nymid_by_payment_code to identify and remove those cases.
+    //    The receive list (blockchain truth) always wins — we remove the send-side duplicate.
+    if (Object.keys(this._nymid_by_payment_code).length > 0) {
+      // Build a set of nymIds already represented by a code in the receive list.
+      const receiveNymIds = new Set<string>();
+      for (const code of this._receive_payment_codes) {
+        const nymId = this._nymid_by_payment_code[code];
+        if (nymId) receiveNymIds.add(nymId);
+      }
+
+      // Remove from send list any code whose nymId is already in the receive list.
+      this._send_payment_codes = this._send_payment_codes.filter((code) => {
+        const nymId = this._nymid_by_payment_code[code];
+        return !nymId || !receiveNymIds.has(nymId);
+      });
+
+      // Also deduplicate within the receive list itself by nymId — keep first occurrence.
+      const seenReceiveNymIds = new Set<string>();
+      this._receive_payment_codes = this._receive_payment_codes.filter((code) => {
+        const nymId = this._nymid_by_payment_code[code];
+        if (!nymId) return true; // no nymId info yet — keep it
+        if (seenReceiveNymIds.has(nymId)) return false; // duplicate — drop
+        seenReceiveNymIds.add(nymId);
+        return true;
+      });
+
+      // And within the send list.
+      const seenSendNymIds = new Set<string>();
+      this._send_payment_codes = this._send_payment_codes.filter((code) => {
+        const nymId = this._nymid_by_payment_code[code];
+        if (!nymId) return true;
+        if (seenSendNymIds.has(nymId)) return false;
+        seenSendNymIds.add(nymId);
+        return true;
+      });
+    }
+  }
+
+  /**
    * adding counterparty whom we can pay. trusting that notificaton transaction is in place already
    */
   addBIP47Receiver(paymentCode: string) {
     if (this._send_payment_codes.includes(paymentCode)) return; // already in send list
+    if (this._receive_payment_codes.includes(paymentCode)) return; // already in receive list (bidirectional contact)
     this._send_payment_codes.push(paymentCode);
   }
 
