@@ -440,4 +440,53 @@ describe('BIP47 wallet methods', () => {
       assert.strictEqual(result, false);
     });
   });
+
+  describe('resolveUnmappedPaymentCodes', () => {
+    it('populates nymId map for codes missing entries', async () => {
+      const w = new HDSegwitBech32Wallet();
+      w.setSecret(TEST_MNEMONIC);
+      w.switchBIP47(true);
+
+      // Simulate blockchain scan added ALICE_PC to receive list (no nymId mapped yet)
+      w._receive_payment_codes = [ALICE_PC];
+      w._nymid_by_payment_code = {};
+
+      mockNym.mockImplementation(async (codeOrId: string) => {
+        if (codeOrId === ALICE_PC) {
+          return {
+            value: {
+              nymID: 'alice_nym',
+              codes: [
+                { code: ALICE_PC, claimed: true },
+                { code: CHARLIE_PC, claimed: false },
+              ],
+            },
+            statusCode: 200,
+            message: 'OK',
+          };
+        }
+        return { value: null, statusCode: 404, message: 'Not found' };
+      });
+
+      await w.resolveUnmappedPaymentCodes();
+
+      // Both of Alice's codes should now be in the nymId map
+      assert.strictEqual(w._nymid_by_payment_code[ALICE_PC], 'alice_nym');
+      assert.strictEqual(w._nymid_by_payment_code[CHARLIE_PC], 'alice_nym');
+    });
+
+    it('skips codes already in the nymId map', async () => {
+      const w = new HDSegwitBech32Wallet();
+      w.setSecret(TEST_MNEMONIC);
+      w.switchBIP47(true);
+
+      w._receive_payment_codes = [ALICE_PC];
+      w._nymid_by_payment_code = { [ALICE_PC]: 'alice_nym' };
+
+      await w.resolveUnmappedPaymentCodes();
+
+      // Should not have called the API — ALICE_PC was already mapped
+      assert.strictEqual(mockNym.mock.calls.length, 0);
+    });
+  });
 });

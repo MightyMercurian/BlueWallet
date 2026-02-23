@@ -1916,8 +1916,7 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
    * nymId's payment codes in `_nymid_by_payment_code`, and return the canonical
    * (segwit = codes[0]) payment code string — or null on failure.
    *
-   * This is the central place for nymId resolution. Both the blockchain scan and the
-   * API recovery path call this so we always have consistent identity data.
+   * Called by the API recovery path and `resolveUnmappedPaymentCodes()`.
    */
   private async _resolveNymId(paymentCodeOrNymId: string): Promise<string | null> {
     try {
@@ -1964,25 +1963,8 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
           continue;
         }
 
-        // Resolve nymId so we can detect cross-code duplicates later in sanitize.
-        // Fire-and-forget — we don't block on this; sanitizeBIP47PaymentCodes() will
-        // use the map on next startup once it's been populated.
-        this._resolveNymId(paymentCode).catch(() => {/* ignore network errors */});
-
-        if (this._receive_payment_codes.includes(paymentCode)) continue; // already have it in receive list
-        if (this._send_payment_codes.includes(paymentCode)) continue; // already have it in send list (bidirectional contact)
-
-        // NymId-based cross-code dedup: check if we already know this person under a
-        // different payment code (segwit vs non-segwit). Use the cached map — if we've
-        // seen this nymId before we'll skip this code.
-        const knownNymId = this._nymid_by_payment_code?.[paymentCode];
-        if (knownNymId) {
-          const alreadyKnownByNymId = [
-            ...this._receive_payment_codes,
-            ...this._send_payment_codes,
-          ].some(known => this._nymid_by_payment_code?.[known] === knownNymId);
-          if (alreadyKnownByNymId) continue;
-        }
+        if (this._receive_payment_codes.includes(paymentCode)) continue; // already have it
+        if (this._send_payment_codes.includes(paymentCode)) continue; // already in send list
 
         this._receive_payment_codes.push(paymentCode);
         this._next_free_payment_code_address_index_receive[paymentCode] = 0; // initialize
@@ -2220,6 +2202,24 @@ export class AbstractHDElectrumWallet extends AbstractHDWallet {
         seenSendNymIds.add(nymId);
         return true;
       });
+    }
+  }
+
+  /**
+   * Batch-resolve nymIds for any payment codes not yet in the `_nymid_by_payment_code` map.
+   * Called after both blockchain scan and API recovery so that `sanitizeBIP47PaymentCodes()`
+   * has complete nymId data for cross-code dedup on first sync.
+   */
+  async resolveUnmappedPaymentCodes(): Promise<void> {
+    this._nymid_by_payment_code = this._nymid_by_payment_code || {};
+    const allCodes = [...this._receive_payment_codes, ...this._send_payment_codes];
+    const unmapped = allCodes.filter(c => !this._nymid_by_payment_code[c]);
+    if (unmapped.length === 0) return;
+
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < unmapped.length; i += BATCH_SIZE) {
+      const batch = unmapped.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(code => this._resolveNymId(code)));
     }
   }
 
