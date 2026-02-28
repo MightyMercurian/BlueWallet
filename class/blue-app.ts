@@ -831,8 +831,14 @@ export class BlueApp {
           await wallet.fetchBIP47ReceiverPaymentCodesViaPaynym();
         }
 
-        // C. Cross-array dedup: clean up any duplicates that arose from the two fetches above
-        //    (e.g. a code that appeared in both _receive_ and _send_ lists).
+        // C. Resolve nymIds for any codes not yet mapped (e.g. codes from blockchain scan).
+        if ('resolveUnmappedPaymentCodes' in wallet) {
+          await (wallet as any).resolveUnmappedPaymentCodes();
+        }
+
+        // D. Cross-array dedup: clean up any duplicates that arose from the two fetches above
+        //    (e.g. a code that appeared in both _receive_ and _send_ lists, or same person
+        //    under different payment codes detected via nymId).
         if ('sanitizeBIP47PaymentCodes' in wallet) {
           (wallet as any).sanitizeBIP47PaymentCodes();
         }

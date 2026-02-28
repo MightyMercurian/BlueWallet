@@ -145,10 +145,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   overlayContainer: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -45 }, { translateY: -45 }],
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
   },

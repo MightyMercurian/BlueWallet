@@ -42,19 +42,18 @@ describe('BIP47 wallet methods', () => {
   });
 
   describe('addBIP47Receiver — bidirectional support', () => {
-    it('allows same code in both receive and send lists (bidirectional BIP47)', () => {
+    it('skips adding to send list when code already in receive list', () => {
       const w = new HDSegwitBech32Wallet();
       w.setSecret(TEST_MNEMONIC);
 
       // Simulate someone sent us a notification tx — their code is in receive list
       w._receive_payment_codes = [ALICE_PC];
 
-      // Now we want to pay them back — add to send list
+      // Try to add to send list — should be skipped (receive list takes priority)
       w.addBIP47Receiver(ALICE_PC);
 
-      // Must exist in BOTH lists for bidirectional payments
       assert.ok(w._receive_payment_codes.includes(ALICE_PC), 'Should remain in receive list');
-      assert.ok(w._send_payment_codes.includes(ALICE_PC), 'Should be added to send list');
+      assert.strictEqual(w._send_payment_codes.length, 0, 'Should NOT be added to send list (receive wins)');
     });
 
     it('prevents duplicates within send list', () => {
@@ -90,19 +89,16 @@ describe('BIP47 wallet methods', () => {
   });
 
   describe('fetchBIP47ReceiverPaymentCodesViaPaynym', () => {
-    it('picks only the claimed payment code from a nym profile', async () => {
+    it('uses canonical (first) payment code from a nym profile', async () => {
       const w = new HDSegwitBech32Wallet();
       w.setSecret(TEST_MNEMONIC);
       w.switchBIP47(true);
-
-      // Mock notification tx exists for ALICE_PC (we sent one on-chain)
-      w.getBIP47NotificationTransaction = (code: string) => (code === ALICE_PC ? { txid: 'fake_tx' } as any : undefined);
 
       const myPC = w.getBIP47PaymentCode();
 
       mockNym.mockImplementation(async (codeOrId: string) => {
         if (codeOrId === myPC) {
-          // My own profile — following Alice
+          // My own profile — following Alice, and I'm claimed
           return {
             value: {
               nymID: 'my_nym',
@@ -114,13 +110,13 @@ describe('BIP47 wallet methods', () => {
           };
         }
         if (codeOrId === 'alice_nym') {
-          // Alice has TWO codes — only one is claimed
+          // Alice has TWO codes — codes[0] is canonical (segwit)
           return {
             value: {
               nymID: 'alice_nym',
               codes: [
-                { code: CHARLIE_PC, claimed: false },
                 { code: ALICE_PC, claimed: true },
+                { code: CHARLIE_PC, claimed: false },
               ],
             },
             statusCode: 200,
@@ -132,8 +128,9 @@ describe('BIP47 wallet methods', () => {
 
       await w.fetchBIP47ReceiverPaymentCodesViaPaynym();
 
-      assert.ok(w._send_payment_codes.includes(ALICE_PC), 'Should include the claimed code');
-      assert.ok(!w._send_payment_codes.includes(CHARLIE_PC), 'Should NOT include the unclaimed code');
+      // _resolveNymId returns codes[0] — the canonical/segwit code
+      assert.ok(w._send_payment_codes.includes(ALICE_PC), 'Should include the canonical (first) code');
+      assert.ok(!w._send_payment_codes.includes(CHARLIE_PC), 'Should NOT include the non-canonical code');
       assert.strictEqual(w._send_payment_codes.length, 1);
     });
 
@@ -141,9 +138,6 @@ describe('BIP47 wallet methods', () => {
       const w = new HDSegwitBech32Wallet();
       w.setSecret(TEST_MNEMONIC);
       w.switchBIP47(true);
-
-      // Mock notification tx exists for CHARLIE_PC
-      w.getBIP47NotificationTransaction = (code: string) => (code === CHARLIE_PC ? { txid: 'fake_tx' } as any : undefined);
 
       const myPC = w.getBIP47PaymentCode();
 
@@ -182,43 +176,36 @@ describe('BIP47 wallet methods', () => {
       assert.strictEqual(w._send_payment_codes.length, 1);
     });
 
-    it('skips codes without a notification tx on-chain', async () => {
+    it('skips API recovery when paynym is unclaimed', async () => {
       const w = new HDSegwitBech32Wallet();
       w.setSecret(TEST_MNEMONIC);
       w.switchBIP47(true);
 
-      // No notification txs exist — getBIP47NotificationTransaction returns undefined for all
       const myPC = w.getBIP47PaymentCode();
 
       mockNym.mockImplementation(async (codeOrId: string) => {
         if (codeOrId === myPC) {
+          // Unclaimed paynym — following list is meaningless
           return {
             value: {
               nymID: 'my_nym',
               following: [{ nymId: 'alice_nym' }],
-              codes: [{ code: myPC, claimed: true }],
+              codes: [{ code: myPC, claimed: false }],
             },
             statusCode: 200,
             message: 'OK',
           };
         }
-        if (codeOrId === 'alice_nym') {
-          return {
-            value: {
-              nymID: 'alice_nym',
-              codes: [{ code: ALICE_PC, claimed: true }],
-            },
-            statusCode: 200,
-            message: 'OK',
-          };
-        }
+        // Should never reach here — unclaimed should bail early
         return { value: null, statusCode: 404, message: 'Not found' };
       });
 
       await w.fetchBIP47ReceiverPaymentCodesViaPaynym();
 
-      // Code found in directory but no notification tx — should NOT be recovered
-      assert.strictEqual(w._send_payment_codes.length, 0, 'Should not recover code without notification tx');
+      // Unclaimed paynym — should not attempt to recover contacts via API
+      assert.strictEqual(w._send_payment_codes.length, 0, 'Should not recover contacts when unclaimed');
+      // Only 1 call (own profile) — should not have fetched alice_nym
+      assert.strictEqual(mockNym.mock.calls.length, 1, 'Should only call nym() once for own profile');
     });
 
     it('handles undefined following without crashing', async () => {
@@ -451,6 +438,55 @@ describe('BIP47 wallet methods', () => {
 
       const result = await w.isMyPaynymClaimed();
       assert.strictEqual(result, false);
+    });
+  });
+
+  describe('resolveUnmappedPaymentCodes', () => {
+    it('populates nymId map for codes missing entries', async () => {
+      const w = new HDSegwitBech32Wallet();
+      w.setSecret(TEST_MNEMONIC);
+      w.switchBIP47(true);
+
+      // Simulate blockchain scan added ALICE_PC to receive list (no nymId mapped yet)
+      w._receive_payment_codes = [ALICE_PC];
+      w._nymid_by_payment_code = {};
+
+      mockNym.mockImplementation(async (codeOrId: string) => {
+        if (codeOrId === ALICE_PC) {
+          return {
+            value: {
+              nymID: 'alice_nym',
+              codes: [
+                { code: ALICE_PC, claimed: true },
+                { code: CHARLIE_PC, claimed: false },
+              ],
+            },
+            statusCode: 200,
+            message: 'OK',
+          };
+        }
+        return { value: null, statusCode: 404, message: 'Not found' };
+      });
+
+      await w.resolveUnmappedPaymentCodes();
+
+      // Both of Alice's codes should now be in the nymId map
+      assert.strictEqual(w._nymid_by_payment_code[ALICE_PC], 'alice_nym');
+      assert.strictEqual(w._nymid_by_payment_code[CHARLIE_PC], 'alice_nym');
+    });
+
+    it('skips codes already in the nymId map', async () => {
+      const w = new HDSegwitBech32Wallet();
+      w.setSecret(TEST_MNEMONIC);
+      w.switchBIP47(true);
+
+      w._receive_payment_codes = [ALICE_PC];
+      w._nymid_by_payment_code = { [ALICE_PC]: 'alice_nym' };
+
+      await w.resolveUnmappedPaymentCodes();
+
+      // Should not have called the API — ALICE_PC was already mapped
+      assert.strictEqual(mockNym.mock.calls.length, 0);
     });
   });
 });
