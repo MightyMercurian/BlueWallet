@@ -142,13 +142,12 @@ export class HDSegwitBech32Wallet extends AbstractHDElectrumWallet {
   }
 
   /**
-   * Generate signature for Paynym claim
-   * Signs token bytes directly with BIP47 notification address private key
-   * @param token - Token from paynym.rs API
-   * @returns Promise<string> Hex-encoded signature
+   * Generate signature for Paynym claim or Auth47 challenge
+   * Signs token/challenge string with BIP47 notification address private key
+   * @param token - Token from paynym.rs API OR Auth47 challenge string
+   * @returns Promise<string> Base64-encoded signature
    */
   async generatePaynymClaimSignature(token: string): Promise<string> {
-
     if (!this.allowBIP47() || !this.isBIP47Enabled()) {
       throw new Error('BIP47 is not enabled for this wallet');
     }
@@ -167,7 +166,7 @@ export class HDSegwitBech32Wallet extends AbstractHDElectrumWallet {
 
     // Create ECPair from notification node private key
     // Validate private key is on secp256k1 curve before signing
-    ECPair.fromPrivateKey(notificationNode.privateKey);
+    const ecPair = ECPair.fromPrivateKey(notificationNode.privateKey);
 
     // Use Bitcoin message signing (like BitcoinJ's ECKey.signMessage())
     // This matches Samourai/Sparrow implementation
@@ -186,9 +185,7 @@ export class HDSegwitBech32Wallet extends AbstractHDElectrumWallet {
 
     // Convert signature to base64 string (NOT hex!)
     // Paynym API expects base64 format (like BitcoinJ's ECKey.signMessage())
-    const signatureBase64 = signature.toString('base64');
-
-    return signatureBase64;
+    return signature.toString('base64');
   }
 
   /**

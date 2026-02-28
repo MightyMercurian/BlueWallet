@@ -56,6 +56,7 @@ import ManageWallets from '../screen/wallets/ManageWallets';
 import ReceiveDetails from '../screen/receive/ReceiveDetails';
 import PaynymClaimScreen from '../screen/paynym/PaynymClaimScreen';
 import AddContactScreen from '../screen/wallets/AddContactScreen';
+import Auth47Screen from '../screen/wallets/Auth47Screen';
 
 const DetailViewStackScreensStack = () => {
   const theme = useTheme();
@@ -404,6 +405,14 @@ const DetailViewStackScreensStack = () => {
         component={PaynymClaimScreen}
         options={navigationStyle({
           title: loc.paynym.claim_title,
+          statusBarStyle: 'auto',
+        })(theme)}
+      />
+      <DetailViewStack.Screen
+        name="Auth47"
+        component={Auth47Screen}
+        options={navigationStyle({
+          title: loc.auth47.title,
           statusBarStyle: 'auto',
         })(theme)}
       />

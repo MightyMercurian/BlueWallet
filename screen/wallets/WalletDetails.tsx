@@ -65,6 +65,7 @@ const WalletDetails: React.FC = () => {
   const [isContactsVisible, setIsContactsVisible] = useState<boolean>(
     (wallet.allowBIP47 && wallet.allowBIP47() && wallet.isBIP47Enabled && wallet.isBIP47Enabled()) || false,
   );
+  const [isPaynymClaimed, setIsPaynymClaimed] = useState<boolean>(false);
 
   const [hideTransactionsInWalletsList, setHideTransactionsInWalletsList] = useState<boolean>(
     wallet.getHideTransactionsInWalletsList ? !wallet.getHideTransactionsInWalletsList() : true,
@@ -265,6 +266,19 @@ const WalletDetails: React.FC = () => {
 
   useEffect(() => {
     setIsContactsVisible(wallet.allowBIP47 && wallet.allowBIP47() && isBIP47Enabled);
+  }, [isBIP47Enabled, wallet]);
+
+  // Check if the PayNym is claimed so we can show the Auth47 button
+  useEffect(() => {
+    if (!isBIP47Enabled || !(wallet as any).isMyPaynymClaimed) {
+      setIsPaynymClaimed(false);
+      return;
+    }
+    (wallet as any).isMyPaynymClaimed().then((claimed: boolean) => {
+      setIsPaynymClaimed(claimed);
+    }).catch(() => {
+      setIsPaynymClaimed(false);
+    });
   }, [isBIP47Enabled, wallet]);
 
   useFocusEffect(
@@ -687,6 +701,16 @@ const WalletDetails: React.FC = () => {
                   <>
                     <BlueSpacing20 />
                     <SecondButton onPress={navigateToSignVerify} testID="SignVerify" title={loc.addresses.sign_title} />
+                  </>
+                )}
+                {isPaynymClaimed && (
+                  <>
+                    <BlueSpacing20 />
+                    <SecondButton
+                      onPress={() => navigate('Auth47', { walletID: wallet.getID() })}
+                      testID="Auth47Button"
+                      title={loc.auth47.title}
+                    />
                   </>
                 )}
                 <BlueSpacing20 />

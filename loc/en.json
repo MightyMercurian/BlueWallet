@@ -687,6 +687,25 @@
     "notif_tx": "Notification transaction",
     "not_found": "Payment code not found"
   },
+  "auth47": {
+    "title": "Authenticate with Auth47",
+    "description_title": "Auth47 Authentication",
+    "description": "Auth47 lets you prove ownership of your PayNym to log in to compatible services. Scan the Auth47 QR code presented by the service to authenticate.",
+    "scan_button": "Scan Auth47 QR Code",
+    "signing": "Signing challenge...",
+    "sending": "Sending authentication...",
+    "success": "Authentication successful",
+    "success_title": "Authenticated!",
+    "success_subtitle": "You have successfully authenticated with Auth47.",
+    "authenticate_again": "Authenticate Again",
+    "error_title": "Authentication Failed",
+    "try_again": "Try Again",
+    "invalid_qr": "Invalid Auth47 QR code. Please scan a valid auth47:// QR code.",
+    "server_error": "Server returned an error",
+    "unknown_error": "An unknown error occurred",
+    "wallet_not_found": "Wallet not found",
+    "not_supported": "This wallet does not support Auth47 authentication"
+  },
   "paynym": {
     "claim_title": "Claim Your PayNym",
     "claim_subtitle": "A PayNym is a human-readable identifier for your payment code.",

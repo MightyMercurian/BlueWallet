@@ -122,4 +122,5 @@ export type DetailViewStackParamList = {
   ManageWallets: undefined;
   PaynymClaim: { walletID: string };
   PaynymContacts: { walletID: string };
+  Auth47: { walletID: string };
 };
