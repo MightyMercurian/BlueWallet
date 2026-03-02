@@ -164,9 +164,8 @@ export class HDSegwitBech32Wallet extends AbstractHDElectrumWallet {
       throw new Error('Failed to derive notification private key');
     }
 
-    // Create ECPair from notification node private key
     // Validate private key is on secp256k1 curve before signing
-    const ecPair = ECPair.fromPrivateKey(notificationNode.privateKey);
+    ECPair.fromPrivateKey(notificationNode.privateKey);
 
     // Use Bitcoin message signing (like BitcoinJ's ECKey.signMessage())
     // This matches Samourai/Sparrow implementation

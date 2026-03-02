@@ -11,11 +11,13 @@ import SafeAreaScrollView from '../../components/SafeAreaScrollView';
 import { BlueSpacing10, BlueSpacing20 } from '../../components/BlueSpacing';
 import Button from '../../components/Button';
 import { SecondButton } from '../../components/SecondButton';
-import { BlueBigCheckmark } from '../../components/BlueBigCheckmark';
+import PaynymAvatar from '../../components/paynym/PaynymAvatar';
+import { SuccessView } from '../send/success';
 import loc from '../../loc';
 import { DetailViewStackParamList } from '../../navigation/DetailViewStackParamList';
 import { scanQrHelper } from '../../helpers/scan-qr';
 import { fetch } from '../../util/fetch';
+import { getDomain } from '../../models/blockExplorer';
 
 const LOG_TAG = '[Auth47]';
 
@@ -34,8 +36,9 @@ type Auth47RouteProps = RouteProp<DetailViewStackParamList, 'Auth47'>;
  * 2. Reconstruct the challenge string (always uses r= format):
  *    - If r= is present: auth47://<nonce>?r=<resource>[&e=<expiry>]
  *    - If r= is missing: auth47://<nonce>?r=<callbackUrl>[&e=<expiry>] (callback used as resource)
- * 3. Sign the challenge with the notification address private key (P2PKH message sig)
- * 4. POST response JSON to callback URL:
+ * 3. Show confirmation with target domain
+ * 4. Sign the challenge with the notification address private key (P2PKH message sig)
+ * 5. POST response JSON to callback URL:
  *    { auth47_response: "1.0", challenge, signature, nym: paymentCode, address: null }
  */
 const Auth47Screen: React.FC = () => {
@@ -48,8 +51,10 @@ const Auth47Screen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'signing' | 'sending' | 'success' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
+  const [authedDomain, setAuthedDomain] = useState('');
 
   const wallet = wallets.find(w => w.getID() === walletID) as any;
+  const paymentCode = wallet?.getBIP47PaymentCode ? wallet.getBIP47PaymentCode() : undefined;
 
   const stylesHook = StyleSheet.create({
     root: {
@@ -123,7 +128,6 @@ const Auth47Screen: React.FC = () => {
       if (!callbackUrl) return null;
 
       // 'r' is the resource; track if it was explicitly provided
-      const resourceExplicit = params['r'] !== undefined;
       const resource = params['r'] ?? null;
 
       // 'e' is optional expiry
@@ -166,6 +170,7 @@ const Auth47Screen: React.FC = () => {
       setLoading(true);
       setStatus('idle');
       setStatusMessage('');
+      setAuthedDomain('');
 
       // Step 1: Scan QR code
       console.log(`${LOG_TAG} Opening QR scanner...`);
@@ -195,30 +200,63 @@ const Auth47Screen: React.FC = () => {
       console.log(`${LOG_TAG} Parsed URI - nonce: ${parsed.nonce}, callbackUrl: ${parsed.callbackUrl}, resource: ${parsed.resource}, expiry: ${parsed.expiry}`);
       console.log(`${LOG_TAG} Challenge string: ${parsed.challenge}`);
 
-      const { challenge, callbackUrl } = parsed;
+      // Step 2b: Check expiry
+      if (parsed.expiry && Date.now() / 1000 > Number(parsed.expiry)) {
+        console.error(`${LOG_TAG} Challenge has expired`);
+        triggerHapticFeedback(HapticFeedbackTypes.NotificationError);
+        setStatus('error');
+        setStatusMessage(loc.auth47.expired);
+        setLoading(false);
+        return;
+      }
 
-      // Step 3: Sign the challenge
+      const { challenge, callbackUrl } = parsed;
+      const domain = getDomain(callbackUrl) || callbackUrl;
+      setAuthedDomain(domain);
+
+      // Step 3: Confirm with user before signing
+      console.log(`${LOG_TAG} Asking user to confirm authentication with ${domain}`);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          presentAlert({
+            title: loc.auth47.confirm_title,
+            message: loc.formatString(loc.auth47.confirm_message, { domain }),
+            buttons: [
+              { text: loc._.cancel, onPress: () => reject(new Error('cancelled')), style: 'cancel' },
+              { text: loc.auth47.confirm_authenticate, onPress: () => resolve(), style: 'default' },
+            ],
+            options: { cancelable: false },
+          });
+        });
+      } catch {
+        console.log(`${LOG_TAG} User cancelled authentication`);
+        setLoading(false);
+        setAuthedDomain('');
+        return;
+      }
+
+      // Step 4: Sign the challenge
       setStatus('signing');
-      setStatusMessage(loc.auth47.signing);
+      setStatusMessage(loc.formatString(loc.auth47.signing, { domain }));
       console.log(`${LOG_TAG} Getting payment code...`);
-      const paymentCode = wallet.getBIP47PaymentCode();
-      console.log(`${LOG_TAG} Payment code: ${paymentCode}`);
+      const pc = wallet.getBIP47PaymentCode();
+      console.log(`${LOG_TAG} Payment code: ${pc}`);
       console.log(`${LOG_TAG} Generating signature for challenge...`);
       const signature = await wallet.generatePaynymClaimSignature(challenge);
       console.log(`${LOG_TAG} Signature generated: ${signature}`);
 
-      // Step 4: POST the auth response to the callback URL
+      // Step 5: POST the auth response to the callback URL
       // Response format per Auth47 spec:
       // { auth47_response: "1.0", challenge, signature, nym }
       // Note: 'address' field is omitted (not required by spec)
       setStatus('sending');
-      setStatusMessage(loc.auth47.sending);
+      setStatusMessage(loc.formatString(loc.auth47.sending, { domain }));
 
       const requestBody = {
         auth47_response: '1.0',
         challenge,
         signature,
-        nym: paymentCode,
+        nym: pc,
       };
       console.log(`${LOG_TAG} POSTing to callback URL: ${callbackUrl}`);
       console.log(`${LOG_TAG} Request body: ${JSON.stringify(requestBody)}`);
@@ -233,7 +271,7 @@ const Auth47Screen: React.FC = () => {
 
       console.log(`${LOG_TAG} Response status: ${response.status} ${response.statusText}`);
 
-      if (response.ok || response.status === 200 || response.status === 204) {
+      if (response.ok) {
         console.log(`${LOG_TAG} Auth successful!`);
         triggerHapticFeedback(HapticFeedbackTypes.NotificationSuccess);
         setStatus('success');
@@ -263,21 +301,24 @@ const Auth47Screen: React.FC = () => {
   const handleReset = () => {
     setStatus('idle');
     setStatusMessage('');
+    setAuthedDomain('');
   };
 
   const renderStatus = () => {
     if (status === 'success') {
       return (
         <View style={styles.statusContainer}>
-          <BlueBigCheckmark />
+          <SuccessView />
           <BlueSpacing20 />
           <Text style={[styles.statusTitle, stylesHook.successText]}>{loc.auth47.success_title}</Text>
           <BlueSpacing10 />
-          <Text style={[styles.statusSubtitle, stylesHook.labelText]}>{loc.auth47.success_subtitle}</Text>
+          <Text style={[styles.statusSubtitle, stylesHook.labelText]}>
+            {loc.formatString(loc.auth47.success_subtitle, { domain: authedDomain })}
+          </Text>
           <BlueSpacing20 />
           <SecondButton onPress={handleReset} title={loc.auth47.authenticate_again} />
           <BlueSpacing20 />
-          <SecondButton onPress={() => navigation.goBack()} title={loc._.ok} />
+          <Button onPress={() => navigation.goBack()} title={loc._.ok} />
         </View>
       );
     }
@@ -315,6 +356,13 @@ const Auth47Screen: React.FC = () => {
     <SafeAreaScrollView style={[styles.root, stylesHook.root]} contentContainerStyle={styles.contentContainer}>
       <BlueSpacing20 />
 
+      {paymentCode && status === 'idle' && !loading && (
+        <View style={styles.avatarContainer}>
+          <PaynymAvatar paymentCode={paymentCode} size={80} />
+          <BlueSpacing20 />
+        </View>
+      )}
+
       <View style={styles.descriptionContainer}>
         <Text style={[styles.descriptionTitle, stylesHook.statusText]}>{loc.auth47.description_title}</Text>
         <Text style={[styles.descriptionText, stylesHook.labelText]}>{loc.auth47.description}</Text>
@@ -347,6 +395,9 @@ const styles = StyleSheet.create({
   contentContainer: {
     paddingHorizontal: 20,
     paddingBottom: 40,
+  },
+  avatarContainer: {
+    alignItems: 'center',
   },
   descriptionContainer: {
     marginBottom: 10,
