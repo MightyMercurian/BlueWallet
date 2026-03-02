@@ -48,8 +48,7 @@ const Auth47Screen: React.FC = () => {
   const route = useRoute<Auth47RouteProps>();
   const { walletID } = route.params;
 
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'signing' | 'sending' | 'success' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'signing' | 'success' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
   const [authedDomain, setAuthedDomain] = useState('');
 
@@ -167,8 +166,6 @@ const Auth47Screen: React.FC = () => {
     }
 
     try {
-      setLoading(true);
-      setStatus('idle');
       setStatusMessage('');
       setAuthedDomain('');
 
@@ -178,7 +175,6 @@ const Auth47Screen: React.FC = () => {
 
       if (!scannedData) {
         console.log(`${LOG_TAG} QR scan cancelled by user`);
-        setLoading(false);
         return;
       }
       console.log(`${LOG_TAG} Raw scanned data: ${scannedData}`);
@@ -193,7 +189,6 @@ const Auth47Screen: React.FC = () => {
         setStatus('error');
         setStatusMessage(loc.auth47.invalid_qr);
         presentAlert({ title: loc.errors.error, message: loc.auth47.invalid_qr });
-        setLoading(false);
         return;
       }
 
@@ -206,7 +201,6 @@ const Auth47Screen: React.FC = () => {
         triggerHapticFeedback(HapticFeedbackTypes.NotificationError);
         setStatus('error');
         setStatusMessage(loc.auth47.expired);
-        setLoading(false);
         return;
       }
 
@@ -230,14 +224,13 @@ const Auth47Screen: React.FC = () => {
         });
       } catch {
         console.log(`${LOG_TAG} User cancelled authentication`);
-        setLoading(false);
         setAuthedDomain('');
         return;
       }
 
-      // Step 4: Sign the challenge
+      // Step 4: Sign and send
       setStatus('signing');
-      setStatusMessage(loc.formatString(loc.auth47.signing, { domain }));
+      setStatusMessage(loc.formatString(loc.auth47.sending, { domain }));
       console.log(`${LOG_TAG} Getting payment code...`);
       const pc = wallet.getBIP47PaymentCode();
       console.log(`${LOG_TAG} Payment code: ${pc}`);
@@ -248,9 +241,6 @@ const Auth47Screen: React.FC = () => {
       // Step 5: POST the auth response to the callback URL
       // Response format per Auth47 spec:
       // { auth47_response: "1.0", challenge, signature, nym }
-      // Note: 'address' field is omitted (not required by spec)
-      setStatus('sending');
-      setStatusMessage(loc.formatString(loc.auth47.sending, { domain }));
 
       const requestBody = {
         auth47_response: '1.0',
@@ -293,7 +283,6 @@ const Auth47Screen: React.FC = () => {
         presentAlert({ title: loc.errors.error, message: errorMsg });
       }
     } finally {
-      setLoading(false);
       console.log(`${LOG_TAG} Auth47 flow completed`);
     }
   }, [wallet]);
@@ -339,7 +328,7 @@ const Auth47Screen: React.FC = () => {
       );
     }
 
-    if (loading) {
+    if (status === 'signing') {
       return (
         <View style={styles.statusContainer}>
           <ActivityIndicator size="large" color={colors.buttonBackgroundColor} />
@@ -356,7 +345,7 @@ const Auth47Screen: React.FC = () => {
     <SafeAreaScrollView style={[styles.root, stylesHook.root]} contentContainerStyle={styles.contentContainer}>
       <BlueSpacing20 />
 
-      {paymentCode && status === 'idle' && !loading && (
+      {paymentCode && status === 'idle' && (
         <View style={styles.avatarContainer}>
           <PaynymAvatar paymentCode={paymentCode} size={80} />
           <BlueSpacing20 />
@@ -372,7 +361,7 @@ const Auth47Screen: React.FC = () => {
 
       {renderStatus()}
 
-      {(status === 'idle' || status === 'error') && !loading && (
+      {(status === 'idle' || status === 'error') && (
         <>
           <BlueSpacing20 />
           <View style={styles.buttonContainer}>

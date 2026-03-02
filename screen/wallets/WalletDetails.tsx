@@ -660,7 +660,7 @@ const WalletDetails: React.FC = () => {
                 <ListItem onPress={navigateToContacts} title={loc.bip47.contacts} chevron />
                 <ListItem 
                   onPress={() => navigate('PaynymClaim', { walletID: wallet.getID() })}
-                  title={loc.paynym.claim_title} 
+                  title={isPaynymClaimed ? loc.paynym.view_title : loc.paynym.claim_title}
                   chevron 
                 />
               </>

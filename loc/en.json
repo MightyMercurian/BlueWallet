@@ -712,6 +712,7 @@
   },
   "paynym": {
     "claim_title": "Claim Your PayNym",
+    "view_title": "View Your PayNym",
     "claim_subtitle": "A PayNym is a human-readable identifier for your payment code.",
     "claim_description": "A PayNym is a human-readable identifier for your payment code. It includes a unique robot avatar and name that others can use to easily identify and send to you.",
     "claim_info_free": "ℹ️ Claiming your PayNym is free and only requires registering with the PayNym directory. No Bitcoin transaction is needed.",
